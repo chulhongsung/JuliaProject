@@ -1,15 +1,16 @@
+
 using Pkg, RData
 
-cd("C:/Users/chica/Desktop/data")
+cd("C:\\Users\\UOS\\Desktop\\portfolio\\dataset")
 
-kospi200 = load("kospi200.RData")
+df_kospi = load("kospi_1018.RData")
 
-typeof(kospi200)
+typeof(df_kospi)
 
-keys(kospi200) ### Dict type의 data에 key를 확인
+keys(df_kospi) ### Dict type의 data에 key를 확인
 
-kospi_mat = kospi200["df_kospi200"][2:end,]
-group_inx = kospi200["group_index"]
+kospi_mat = df_kospi["df_kospi_1018"][2:end,]
+group_inx = df_kospi["group_index"]
 
 ### Data type 변환 DF -> Matrix
 kospi_mat = convert(Matrix, kospi_mat);
@@ -27,8 +28,7 @@ log_return_mat= function(x)
     return log_return_mat
 end
 
-rmat = log_return_mat(kospi_mat) 
-size(rmat)
+rmat = 100 * log_return_mat(kospi_mat)[1:240,:]
 
 using Statistics
 
@@ -39,18 +39,11 @@ ncol = size(rmat)[2]
 
 p = ncol; n = nrow
 
-ρ = 1; τ = 0.1
-
-tmp_z = fill(0, 2*p)
-tmp_u = fill(0, 2*p+2)
-tmp_β = fill(1, p)/p
-tmp_β₀ = 1e-5
-
-tmp_β̃ = vcat(tmp_β₀, tmp_β);
+mean(μ̂)
 
 using Random, Distributions, LinearAlgebra
 
-μ₀ = 0.0001
+μ₀ = 0.05
 
 Amat = vcat(Diagonal(ones(p)), Diagonal(ones(p)), ones(p)', μ̂)
 Bmat = vcat(Diagonal(-1*ones(2*p)), zeros(2*p)', zeros(2*p)')
@@ -61,52 +54,72 @@ K = hcat(zeros(p), Diagonal(ones(p)));
 
 using StatsBase
 
-#countmap(group_inx)
-pl = sqrt.(counts(group_inx)); iter_outer = 1e+6; iter_inner = 100; 
-λ₁ = 0.02; λ₂ = 0.01;
+ρ = 10; τ = 0.1
 
-i = 1
-while i <= iter_outer
-    
-    j = 1 
-    
-    while j <= iter_inner  
+tmp_z = fill(0, 2*p)/p
+tmp_u = fill(0, 2*p+2)
+tmp_β = fill(1, p)/p
+tmp_β₀ = 1e-5
+
+tmp_β̃ = vcat(tmp_β₀, tmp_β);
+
+pl = sqrt.(counts(group_inx)); iter_outer = 1000; iter_inner = 100; 
+
+λ₁ = 0.001; λ₂ = 0.001;
+
+let i = 1
+
+    while i <= iter_outer
+
+        let j = 1 
+
+            while j <= iter_inner  
+
+                tmp_W = Diagonal(ifelse.(abs.((X̃ * tmp_β̃) * 4) .< 1e-8, 1e+8, abs.(1 ./ ((X̃ * tmp_β̃)*4))))
+
+                tmp_β̃ = (-1/2) * inv(X̃' * tmp_W * X̃ + (ρ/2) * (Amat * K)' * (Amat * K)) * ((τ - (1/2)) * X̃' * ones(n) +
+                    ρ * (Amat*K)' * ((1/ρ)*tmp_u + Bmat*tmp_z - Cmat)) 
+                j += 1
+            end
+        end
         
-        tmp_W = Diagonal(ifelse.(abs.((X̃ * tmp_β̃) * 4) .< 1e-8, 1e+8, abs.(1/((X̃ * tmp_β̃)*4))))
+        tmp_β = tmp_β̃[2:end]
 
-        tmp_β̃ = (-1/2) * inv(X̃' * tmp_W * X̃ + (ρ/2) * (Amat * K)' * (Amat * K)) * ((τ - (1/2)) * X̃' * ones(n) +
-            ρ * (Amat*K)' * ((1/ρ)*tmp_u + Bmat*tmp_z - Cmat)) 
-        j += 1
+        v = (Amat * tmp_β - Cmat)
+        v₁ = v[1:p]
+        tmp_z₁ = v₁ + tmp_u[1:p]/ρ
+
+        ### Proximal operator
+        tmp_z₁ = ifelse.(abs.(tmp_z₁) .<= λ₁, 0, tmp_z₁ - λ₁ * sign.(tmp_z₁))
+
+        v₂ = v[(p+1):(2*p)]
+        u₂ = tmp_u[(p+1):(2*p)]
+
+        tmp_z₂ = v₂ + u₂/ρ 
+
+        for l in sort(unique(group_inx))
+            plₗ = pl[l]
+            v₂ₗ = v₂[group_inx .== l]
+            u₂ₗ = u₂[group_inx .== l]
+
+            if(norm(tmp_z₂[group_inx .== l], 2) .> λ₂ * plₗ)
+                tmp_z₂[group_inx .== l] = tmp_z₂[group_inx .== l] - λ₂ * plₗ * tmp_z₂[group_inx .== l] / norm(tmp_z₂[group_inx .== l],2)
+            else 
+                tmp_z₂[group_inx .== l] .= 0
+            end
+        end        
+
+        tmp_z = vcat(tmp_z₁, tmp_z₂)
+
+        tmp_u = tmp_u + ρ * (Amat * tmp_β + Bmat * tmp_z - Cmat)
+
+        i += 1
+
     end
     
-    tmp_β = tmp_β̃[2:end]
-    
-    v = (Amat * tmp_β - Cmat)
-    v₁ = v[1:p]
-    tmp_z₁ = v₁ + tmp_u[1:p]/ρ
-    
-    ### Proximal operator
-    tmp_z₁ = ifelse.(abs.(tmp_z₁) .<= λ₁, 0, tmp_z₁ - λ₁ * sign.(tmp_z₁))
-    
-    v₂ = v[(p+1):end]
-    u₂ = tmp_u[(p+1):end]
-    
-    tmp_z₂ = v₂ + u₂/ρ 
-    
-    for l in 1:unique(group_inx)
-        plₗ = pl[l]
-        v₂ₗ = v₂[group_inx .== l]
-        u₂ₗ = u₂[group_inx .== l]
-        
-        if(norm(tmp_z₂[group_inx .== l], 2) .> λ₂ * plₗ)
-            tmp_z₂[group_inx .== l] = tmp_z₂[group_inx .== l] - λ₂ * plₗ * tmp_z₂[group_inx .== l] / norm(tmp_z₂[group_inx .== l],2)
-        else 
-            tmp_z₂[group_inx .== l] .= 0
-        end
-    end        
-    
-    tmp_z = vcat(tmp_z₁, tmp_z₂)
-    
-    tmp_u = Amat * tmp_β + Bmat * tmp_z - Cmat
-    
+    return tmp_β̃
 end
+
+sum(tmp_β̃[2:end])
+
+μ̂ * tmp_β̃[2:end]
